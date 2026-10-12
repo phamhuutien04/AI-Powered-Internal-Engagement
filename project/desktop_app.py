@@ -1,4 +1,5 @@
 import ctypes
+import json
 import sys
 import threading
 import tkinter as tk
@@ -12,6 +13,7 @@ from matplotlib.figure import Figure
 from PIL import Image
 
 from completion_engine import build_completion_matrix
+from local_ai_engine import MODEL_LABEL, LocalAIError, generate, model_is_ready
 from pending_engine import generate_pending_report
 from reminder_engine import generate_reminders
 from summary_engine import generate_summary
@@ -42,7 +44,7 @@ class EngagementDesktopApp(ctk.CTk):
     NAV_ITEMS = [
         ("workbook", "Workbook"), ("dashboard", "Dashboard"),
         ("completion", "Completion Matrix"), ("pending", "Pending Users"),
-        ("reminder", "Reminder Center"),
+        ("reminder", "Reminder Center"), ("ai", "AI Insights"),
     ]
 
     def __init__(self):
@@ -65,11 +67,14 @@ class EngagementDesktopApp(ctk.CTk):
         self.completion_matrix = pd.DataFrame()
         self.pending_df = pd.DataFrame()
         self.reminder_df = pd.DataFrame()
+        self.current_summary = None
         self.chart_canvases = []
         self.pages, self.nav_buttons, self.tables = {}, {}, []
+        self.ai_ready = False
         self._configure_table_style()
         self._build_shell()
         self.show_page("dashboard")
+        self.after(450, self._check_ai_connection)
 
     def _reapply_window_icon(self):
         """Keep CustomTkinter/Windows from restoring the Python executable icon."""
@@ -164,7 +169,14 @@ class EngagementDesktopApp(ctk.CTk):
             topbar, text="Launch workbook", width=170, height=44, corner_radius=10,
             fg_color=self.COLORS["blue"], hover_color=self.COLORS["blue_hover"],
             font=ctk.CTkFont(size=12, weight="bold"), command=self.choose_workbook)
-        self.open_button.grid(row=0, column=1, sticky="e")
+        self.open_button.grid(row=0, column=2, sticky="e")
+        self.ai_status = ctk.CTkButton(
+            topbar, text="●  AI checking...", width=145, height=44, corner_radius=10,
+            fg_color="#14192E", hover_color="#1B2240", border_width=1,
+            border_color=self.COLORS["border"], text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=lambda: self.show_page("ai"))
+        self.ai_status.grid(row=0, column=1, sticky="e", padx=(0, 12))
 
     def _build_pages(self):
         for key, _ in self.NAV_ITEMS:
@@ -187,6 +199,185 @@ class EngagementDesktopApp(ctk.CTk):
             self.pages["reminder"], "Reminder messages",
             "Ready-to-use messages generated for pending employees", "Export CSV",
             lambda: self.export_csv(self.reminder_df, "reminder_report.csv"))
+        self._build_ai_page()
+
+    def _build_ai_page(self):
+        page = self.pages["ai"]
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+
+        control = ctk.CTkFrame(page, fg_color="#101426", corner_radius=16,
+                               border_width=1, border_color=self.COLORS["border"])
+        control.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        control.grid_columnconfigure(1, weight=1)
+        badge = ctk.CTkFrame(control, width=58, height=58, corner_radius=18,
+                             fg_color="#302765")
+        badge.grid(row=0, column=0, rowspan=2, padx=(20, 16), pady=18)
+        badge.grid_propagate(False)
+        ctk.CTkLabel(badge, text="AI", text_color="white",
+                     font=ctk.CTkFont(size=19, weight="bold")).pack(expand=True)
+        ctk.CTkLabel(control, text="AI business analyst", text_color=self.COLORS["text"],
+                     font=ctk.CTkFont(size=19, weight="bold")).grid(
+                         row=0, column=1, sticky="sw", pady=(18, 1))
+        ctk.CTkLabel(
+            control, text=f"{MODEL_LABEL} · Local and private", text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11)).grid(row=1, column=1, sticky="nw")
+        self.ai_page_status = ctk.CTkLabel(
+            control, text="Checking connection...", text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11))
+        self.ai_page_status.grid(row=0, column=2, sticky="e", padx=(15, 20), pady=(18, 1))
+        self.ai_data_status = ctk.CTkLabel(
+            control, text="Load a workbook before analysis", text_color="#687594",
+            font=ctk.CTkFont(size=10))
+        self.ai_data_status.grid(row=1, column=2, sticky="e", padx=(15, 20))
+
+        report = ctk.CTkFrame(page, fg_color="#101426", corner_radius=16,
+                              border_width=1, border_color=self.COLORS["border"])
+        report.grid(row=1, column=0, sticky="nsew")
+        report.grid_columnconfigure(0, weight=1)
+        report.grid_rowconfigure(1, weight=1)
+        report_header = ctk.CTkFrame(report, fg_color="transparent")
+        report_header.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 14))
+        report_header.grid_columnconfigure(0, weight=1)
+        title_box = ctk.CTkFrame(report_header, fg_color="transparent")
+        title_box.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(title_box, text="Executive insights", text_color=self.COLORS["text"],
+                     font=ctk.CTkFont(size=17, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box, text="Evidence-based risks, priorities and recommended actions",
+            text_color=self.COLORS["muted"], font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.ai_analyze_button = ctk.CTkButton(
+            report_header, text="Analyze with AI", width=145, height=36, corner_radius=9,
+            fg_color=self.COLORS["blue"], hover_color=self.COLORS["blue_hover"],
+            font=ctk.CTkFont(size=11, weight="bold"), command=self._analyze_with_ai,
+            state="disabled")
+        self.ai_analyze_button.grid(row=0, column=1, padx=(12, 0))
+        self.ai_output = ctk.CTkTextbox(
+            report, corner_radius=11, border_width=1, border_color="#252B46",
+            fg_color="#0B0F20", text_color="#DCE4FA", scrollbar_button_color="#343B62",
+            scrollbar_button_hover_color="#49517A", wrap="word",
+            font=ctk.CTkFont(family="Segoe UI", size=13), spacing1=5, spacing3=8)
+        self.ai_output.grid(row=1, column=0, sticky="nsew", padx=22, pady=(0, 22))
+        self._set_ai_output(
+            "AI analysis will appear here.\n\n"
+            "1. Launch an Excel workbook\n"
+            "2. Wait for the dashboard analysis to finish\n"
+            "3. Open AI Insights and select Analyze with AI")
+
+    def _check_ai_connection(self):
+        threading.Thread(target=self._check_ai_worker, daemon=True).start()
+
+    def _check_ai_worker(self):
+        try:
+            ready = model_is_ready()
+            self.after(0, lambda: self._set_ai_state(ready))
+        except LocalAIError:
+            self.after(0, lambda: self._set_ai_state(False))
+
+    def _set_ai_state(self, ready):
+        self.ai_ready = ready
+        if ready:
+            self.ai_status.configure(text="●  AI ready", text_color=self.COLORS["green"],
+                                     border_color="#1E6A55")
+            self.ai_page_status.configure(text="● Connected and ready",
+                                          text_color=self.COLORS["green"])
+        else:
+            self.ai_status.configure(text="●  AI offline", text_color=self.COLORS["amber"],
+                                     border_color="#6A4E23")
+            self.ai_page_status.configure(text="Model is not available yet",
+                                          text_color=self.COLORS["amber"])
+        can_analyze = ready and not self.completion_matrix.empty
+        self.ai_analyze_button.configure(state="normal" if can_analyze else "disabled")
+
+    def _set_ai_output(self, text):
+        self.ai_output.configure(state="normal")
+        self.ai_output.delete("1.0", "end")
+        self.ai_output.insert("1.0", text)
+        self.ai_output.configure(state="disabled")
+
+    def _analyze_with_ai(self):
+        if self.completion_matrix.empty or not self.current_summary:
+            messagebox.showinfo("Workbook required", "Launch a workbook before running AI analysis.")
+            return
+        if not self.ai_ready:
+            messagebox.showinfo("AI is offline", "Wait for the local AI model to become ready.")
+            self._check_ai_connection()
+            return
+        self.ai_analyze_button.configure(state="disabled", text="Analyzing...")
+        self.ai_data_status.configure(text="AI is reviewing the business metrics...",
+                                      text_color=self.COLORS["cyan"])
+        self._set_ai_output("Analyzing engagement patterns and preparing recommendations...")
+        threading.Thread(target=self._ai_analysis_worker, daemon=True).start()
+
+    def _ai_analysis_worker(self):
+        try:
+            prompt = self._build_ai_analysis_prompt()
+            answer = generate(
+                prompt,
+                system=(
+                    "You are NOVA, a senior employee engagement and people analytics advisor. "
+                    "Base every conclusion only on the supplied aggregate data. Be concise, "
+                    "commercially useful, and never invent causes, consequences or facts. "
+                    "Treat missing activity records as follow-up needs, not employee performance failures. "
+                    "Write in English and keep the complete report under 350 words."
+                ),
+                timeout=300,
+            )
+            self.after(0, lambda: self._show_ai_analysis(answer))
+        except Exception as error:
+            error_message = str(error)
+            self.after(0, lambda message=error_message: self._show_ai_analysis_error(message))
+
+    def _build_ai_analysis_prompt(self):
+        total = int(self.current_summary.get("total_users", 0))
+        pending_count = int(len(self.pending_df))
+        completed = max(total - pending_count, 0)
+        missing_frequency = {}
+        if not self.pending_df.empty and "Missing Activities" in self.pending_df.columns:
+            for cell in self.pending_df["Missing Activities"].dropna():
+                for activity in str(cell).split(","):
+                    activity = activity.strip()
+                    if activity:
+                        missing_frequency[activity] = missing_frequency.get(activity, 0) + 1
+        missing_frequency = dict(sorted(
+            missing_frequency.items(), key=lambda item: item[1], reverse=True))
+        missing_count_distribution = {}
+        if not self.pending_df.empty and "Missing Count" in self.pending_df.columns:
+            missing_count_distribution = {
+                str(int(count)): int(number)
+                for count, number in self.pending_df["Missing Count"].value_counts().sort_index().items()
+            }
+        metrics = {
+            "employees": total,
+            "fully_completed_employees": completed,
+            "employees_requiring_action": pending_count,
+            "overall_completion_rate_percent": round(completed / max(total, 1) * 100, 1),
+            "participation_rate_by_activity_percent": self.current_summary.get("presence_metrics", {}),
+            "average_progress_by_activity_percent": self.current_summary.get("status_metrics", {}),
+            "employees_missing_each_activity": missing_frequency,
+            "employees_by_number_of_missing_activities": missing_count_distribution,
+        }
+        return (
+            "Analyze the following aggregate employee engagement metrics:\n"
+            f"{json.dumps(metrics, ensure_ascii=False, indent=2)}\n\n"
+            "Produce an executive report using exactly these sections:\n"
+            "EXECUTIVE SUMMARY — 3 short sentences with the most important numbers.\n"
+            "KEY RISKS — 3 to 5 numbered risks, each tied to evidence in the metrics.\n"
+            "BUSINESS RECOMMENDATIONS — 4 to 6 prioritized, practical recommendations.\n"
+            "30-DAY ACTION PLAN — actions for Week 1, Week 2, and Weeks 3-4, with a measurable KPI.\n"
+            "Do not mention individual employee names. Do not claim why a metric is low unless the data proves it."
+        )
+
+    def _show_ai_analysis(self, answer):
+        self._set_ai_output(answer)
+        self.ai_analyze_button.configure(state="normal", text="Analyze again")
+        self.ai_data_status.configure(text="Analysis complete · recommendations ready",
+                                      text_color=self.COLORS["green"])
+
+    def _show_ai_analysis_error(self, message):
+        self._set_ai_output(f"AI analysis could not be completed.\n\n{message}")
+        self.ai_analyze_button.configure(state="normal", text="Try again")
+        self.ai_data_status.configure(text="Analysis failed", text_color=self.COLORS["amber"])
 
     def _page_frame(self):
         page = ctk.CTkFrame(self.page_host, fg_color="transparent", corner_radius=0)
@@ -282,11 +473,13 @@ class EngagementDesktopApp(ctk.CTk):
                 Path(file_path).name, master_sheet, key_column, sheet_types,
                 completion, summary, pending, reminders))
         except Exception as error:
-            self.after(0, lambda: self._show_error(str(error)))
+            error_message = str(error)
+            self.after(0, lambda message=error_message: self._show_error(message))
 
     def _show_results(self, file_name, master_sheet, key_column, sheet_types,
                       completion, summary, pending, reminders):
         self.completion_matrix, self.pending_df, self.reminder_df = completion, pending, reminders
+        self.current_summary = summary
         classification = pd.DataFrame([{"Sheet": sheet, "Type": kind}
                                        for sheet, kind in sheet_types.items()])
         self.workbook_info.set(f"  {file_name}     Master: {master_sheet}     Key: {key_column}")
@@ -298,6 +491,9 @@ class EngagementDesktopApp(ctk.CTk):
         self.status_text.set(f"Analysis complete · {summary['total_users']} employees · "
                              f"{len(pending)} require action")
         self.open_button.configure(state="normal", text="Launch workbook")
+        self.ai_data_status.configure(text=f"{summary['total_users']} employees ready for AI review",
+                                      text_color=self.COLORS["cyan"])
+        self.ai_analyze_button.configure(state="normal" if self.ai_ready else "disabled")
         self.show_page("dashboard")
 
     def _show_dashboard(self, summary, pending_count):
