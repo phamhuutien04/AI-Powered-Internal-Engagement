@@ -164,12 +164,7 @@ class EngagementDesktopApp(ctk.CTk):
             topbar, text="Launch workbook", width=170, height=44, corner_radius=10,
             fg_color=self.COLORS["blue"], hover_color=self.COLORS["blue_hover"],
             font=ctk.CTkFont(size=12, weight="bold"), command=self.choose_workbook)
-        self.open_button.grid(row=0, column=2, sticky="e")
-        ctk.CTkLabel(
-            topbar, text="●  LOCAL CORE", height=32, corner_radius=16,
-            fg_color="#102C2A", text_color=self.COLORS["green"],
-            font=ctk.CTkFont(size=10, weight="bold")
-        ).grid(row=0, column=1, sticky="e", padx=(0, 12))
+        self.open_button.grid(row=0, column=1, sticky="e")
 
     def _build_pages(self):
         for key, _ in self.NAV_ITEMS:
@@ -198,7 +193,8 @@ class EngagementDesktopApp(ctk.CTk):
         page.grid(row=0, column=0, sticky="nsew")
         return page
 
-    def _table_page(self, parent, title, subtitle, action_text=None, action=None, info_variable=None):
+    def _table_page(self, parent, title, subtitle, action_text=None, action=None,
+                    info_variable=None, secondary_text=None, secondary_action=None):
         card = ctk.CTkFrame(parent, fg_color=self.COLORS["card"], corner_radius=16,
                             border_width=1, border_color=self.COLORS["border"])
         card.pack(fill="both", expand=True)
@@ -218,7 +214,20 @@ class EngagementDesktopApp(ctk.CTk):
                           fg_color=self.COLORS["soft_blue"], hover_color="#272D55",
                           text_color=self.COLORS["blue"],
                           font=ctk.CTkFont(size=11, weight="bold"), command=action).grid(
-                              row=0, column=1, sticky="e")
+                              row=0, column=2, sticky="e")
+        if secondary_text:
+            ctk.CTkButton(
+                header,
+                text=secondary_text,
+                width=130,
+                height=36,
+                corner_radius=9,
+                fg_color=self.COLORS["blue"],
+                hover_color=self.COLORS["blue_hover"],
+                text_color="white",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=secondary_action,
+            ).grid(row=0, column=1, sticky="e", padx=(0, 10))
         if info_variable is not None:
             ctk.CTkLabel(card, textvariable=info_variable, height=36, corner_radius=8,
                          fg_color="#0C1020", text_color=self.COLORS["muted"], anchor="w",
@@ -394,7 +403,10 @@ class EngagementDesktopApp(ctk.CTk):
             table.heading(column, text=column)
             table.column(column, width=width, minwidth=110, stretch=True, anchor="w")
         for index, row in enumerate(dataframe.itertuples(index=False, name=None)):
-            values = ["" if pd.isna(value) else str(value) for value in row]
+            values = [
+                "" if pd.isna(value) else " ".join(str(value).split())
+                for value in row
+            ]
             table.insert("", "end", values=values, tags=("even" if index % 2 == 0 else "odd",))
         table.tag_configure("even", background="#0D1121", foreground="#DCE4FA")
         table.tag_configure("odd", background="#11162A", foreground="#DCE4FA")

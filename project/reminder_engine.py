@@ -1,23 +1,16 @@
 import pandas as pd
 
-from ai_reminder_engine import (
-    DEFAULT_REMINDER_TEMPLATE,
-    generate_reminder_template
+
+REMINDER_TEMPLATE = (
+    "Hi {account}, this is a friendly reminder that the following activities are still pending: "
+    "{missing_activities}. Please complete them and update your progress at your earliest convenience. "
+    "If you have already completed them, please let us know so we can verify the records. Thank you!"
 )
 
 
 def generate_reminders(
     pending_df
 ):
-
-    try:
-        template = generate_reminder_template()
-    except Exception as error:
-        print(
-            "Gemini reminder generation failed; "
-            f"using the default template. Details: {error}"
-        )
-        template = DEFAULT_REMINDER_TEMPLATE
 
     reminder_rows = []
 
@@ -31,13 +24,14 @@ def generate_reminders(
             "Missing Activities"
         ]
 
-        message = template.format(
+        message = REMINDER_TEMPLATE.format(
 
             account=account,
 
             missing_activities=missing
 
         )
+        message = " ".join(message.split())
 
         reminder_rows.append({
 

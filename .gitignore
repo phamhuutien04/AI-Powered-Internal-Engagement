@@ -1,0 +1,4 @@
+project/.env
+project/teams_config.json
+project/__pycache__/
+project/agents/__pycache__/
