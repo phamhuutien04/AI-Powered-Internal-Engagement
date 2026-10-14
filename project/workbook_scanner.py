@@ -53,9 +53,30 @@ def detect_master_sheet(workbook):
             "No visible sheet found."
         )
 
-    # Business Rule:
-    # Sheet đầu tiên luôn là master
-    return sheet_names[0]
+    identity_words = [
+        "account", "email", "username", "user id", "userid",
+        "employee id", "employee code", "staff id", "staff code",
+    ]
+
+    def sheet_score(item):
+        position, (_, dataframe) = item
+        columns = [str(column).strip().lower() for column in dataframe.columns]
+        has_identity = any(
+            any(word in column for word in identity_words)
+            or column == "id"
+            for column in columns
+        )
+        # Prefer a sheet with an identifier, then the broadest list. The original
+        # left-to-right order remains the final tie-breaker.
+        return (
+            int(has_identity),
+            len(dataframe),
+            len(dataframe.columns),
+            -position,
+        )
+
+    _, (best_sheet, _) = max(enumerate(workbook.items()), key=sheet_score)
+    return best_sheet
 
 
 def detect_key_column(master_df):
@@ -67,22 +88,8 @@ def detect_key_column(master_df):
         print(col)
 
     priority_keywords = [
-
-        "account",
-
-        "email",
-
-        "mail",
-
-        "username",
-
-        "user id",
-
-        "userid",
-
-        "employee id",
-
-        "id"
+        "account", "email", "username", "user id", "userid",
+        "employee id", "employee code", "staff id", "staff code",
     ]
 
     # ưu tiên account/email
@@ -101,6 +108,11 @@ def detect_key_column(master_df):
                 )
 
                 return col
+
+    for col in master_df.columns:
+        if str(col).strip().lower() == "id":
+            print(f"\nKEY COLUMN FOUND: {col}")
+            return col
 
     # fallback
     best_col = None
@@ -148,11 +160,12 @@ def classify_sheets(
 
     master_users = set(
         master_df[master_key_column]
+        .dropna()
         .astype(str)
         .str.strip()
         .str.lower()
-        .dropna()
     )
+    master_users.discard("")
 
     sheet_types = {}
 

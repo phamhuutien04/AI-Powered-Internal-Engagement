@@ -71,6 +71,8 @@ class EngagementDesktopApp(ctk.CTk):
         self.chart_canvases = []
         self.pages, self.nav_buttons, self.tables = {}, {}, []
         self.ai_ready = False
+        self.ai_check_in_progress = False
+        self.ai_retry_job = None
         self._configure_table_style()
         self._build_shell()
         self.show_page("dashboard")
@@ -190,14 +192,14 @@ class EngagementDesktopApp(ctk.CTk):
             "Detected sheets and their roles in the engagement model", info_variable=self.workbook_info)
         self.completion_table = self._table_page(
             self.pages["completion"], "Completion matrix",
-            "Completion and progress values for every employee")
+            "Completion and progress values for every record")
         self.pending_table = self._table_page(
-            self.pages["pending"], "Employees requiring action",
+            self.pages["pending"], "Records requiring action",
             "People with one or more outstanding activities", "Export CSV",
             lambda: self.export_csv(self.pending_df, "pending_report.csv"))
         self.reminder_table = self._table_page(
             self.pages["reminder"], "Reminder messages",
-            "Ready-to-use messages generated for pending employees", "Export CSV",
+            "Ready-to-use messages generated for pending records", "Export CSV",
             lambda: self.export_csv(self.reminder_df, "reminder_report.csv"))
         self._build_ai_page()
 
@@ -265,6 +267,9 @@ class EngagementDesktopApp(ctk.CTk):
             "3. Open AI Insights and select Analyze with AI")
 
     def _check_ai_connection(self):
+        if self.ai_check_in_progress:
+            return
+        self.ai_check_in_progress = True
         threading.Thread(target=self._check_ai_worker, daemon=True).start()
 
     def _check_ai_worker(self):
@@ -275,17 +280,24 @@ class EngagementDesktopApp(ctk.CTk):
             self.after(0, lambda: self._set_ai_state(False))
 
     def _set_ai_state(self, ready):
+        self.ai_check_in_progress = False
         self.ai_ready = ready
         if ready:
+            if self.ai_retry_job is not None:
+                self.after_cancel(self.ai_retry_job)
+                self.ai_retry_job = None
             self.ai_status.configure(text="●  AI ready", text_color=self.COLORS["green"],
                                      border_color="#1E6A55")
             self.ai_page_status.configure(text="● Connected and ready",
                                           text_color=self.COLORS["green"])
         else:
-            self.ai_status.configure(text="●  AI offline", text_color=self.COLORS["amber"],
+            self.ai_status.configure(text="●  AI reconnecting", text_color=self.COLORS["amber"],
                                      border_color="#6A4E23")
-            self.ai_page_status.configure(text="Model is not available yet",
+            self.ai_page_status.configure(text="Waiting for the local model...",
                                           text_color=self.COLORS["amber"])
+            if self.ai_retry_job is not None:
+                self.after_cancel(self.ai_retry_job)
+            self.ai_retry_job = self.after(4000, self._check_ai_connection)
         can_analyze = ready and not self.completion_matrix.empty
         self.ai_analyze_button.configure(state="normal" if can_analyze else "disabled")
 
@@ -318,7 +330,9 @@ class EngagementDesktopApp(ctk.CTk):
                     "You are NOVA, a senior employee engagement and people analytics advisor. "
                     "Base every conclusion only on the supplied aggregate data. Be concise, "
                     "commercially useful, and never invent causes, consequences or facts. "
-                    "Treat missing activity records as follow-up needs, not employee performance failures. "
+                    "Only required status activities create follow-up needs. Participation activities "
+                    "are optional and non-participation must never be described as incomplete or non-compliant. "
+                    "Treat pending required activities as follow-up needs, not employee performance failures. "
                     "Write in English and keep the complete report under 350 words."
                 ),
                 timeout=300,
@@ -331,14 +345,17 @@ class EngagementDesktopApp(ctk.CTk):
     def _build_ai_analysis_prompt(self):
         total = int(self.current_summary.get("total_users", 0))
         pending_count = int(len(self.pending_df))
-        completed = max(total - pending_count, 0)
+        mandatory_completed = int(self.current_summary.get("mandatory_completed_users", 0))
+        mandatory_pending = int(self.current_summary.get("mandatory_pending_users", pending_count))
+        mandatory_rate = float(self.current_summary.get("mandatory_progress_rate", 0))
         missing_frequency = {}
         if not self.pending_df.empty and "Missing Activities" in self.pending_df.columns:
             for cell in self.pending_df["Missing Activities"].dropna():
                 for activity in str(cell).split(","):
                     activity = activity.strip()
                     if activity:
-                        missing_frequency[activity] = missing_frequency.get(activity, 0) + 1
+                        base_activity = activity.rsplit(" (", 1)[0]
+                        missing_frequency[base_activity] = missing_frequency.get(base_activity, 0) + 1
         missing_frequency = dict(sorted(
             missing_frequency.items(), key=lambda item: item[1], reverse=True))
         missing_count_distribution = {}
@@ -349,17 +366,22 @@ class EngagementDesktopApp(ctk.CTk):
             }
         metrics = {
             "employees": total,
-            "fully_completed_employees": completed,
-            "employees_requiring_action": pending_count,
-            "overall_completion_rate_percent": round(completed / max(total, 1) * 100, 1),
-            "participation_rate_by_activity_percent": self.current_summary.get("presence_metrics", {}),
-            "average_progress_by_activity_percent": self.current_summary.get("status_metrics", {}),
-            "employees_missing_each_activity": missing_frequency,
-            "employees_by_number_of_missing_activities": missing_count_distribution,
+            "employees_completed_all_required_activities": mandatory_completed,
+            "employees_with_pending_required_activities": mandatory_pending,
+            "average_required_activity_progress_percent": mandatory_rate,
+            "required_progress_by_activity_percent": self.current_summary.get("status_metrics", {}),
+            "optional_activity_participant_counts": self.current_summary.get("presence_counts", {}),
+            "optional_activity_participation_rate_percent": self.current_summary.get("presence_metrics", {}),
+            "required_activity_follow_up_frequency": missing_frequency,
+            "employees_by_number_of_pending_required_activities": missing_count_distribution,
         }
         return (
             "Analyze the following aggregate employee engagement metrics:\n"
             f"{json.dumps(metrics, ensure_ascii=False, indent=2)}\n\n"
+            "Required status activities must be completed by every employee. "
+            "Participation activities are optional records; absence from them "
+            "is not an incomplete task, compliance failure, or follow-up requirement. Keep these two "
+            "categories separate throughout the report.\n\n"
             "Produce an executive report using exactly these sections:\n"
             "EXECUTIVE SUMMARY — 3 short sentences with the most important numbers.\n"
             "KEY RISKS — 3 to 5 numbered risks, each tied to evidence in the metrics.\n"
@@ -467,7 +489,7 @@ class EngagementDesktopApp(ctk.CTk):
             sheet_types = classify_sheets(workbook, master_sheet, key_column)
             completion = build_completion_matrix(workbook, master_sheet, key_column, sheet_types)
             summary = generate_summary(completion, sheet_types)
-            pending = generate_pending_report(completion)
+            pending = generate_pending_report(completion, sheet_types)
             reminders = generate_reminders(pending)
             self.after(0, lambda: self._show_results(
                 Path(file_path).name, master_sheet, key_column, sheet_types,
@@ -480,7 +502,7 @@ class EngagementDesktopApp(ctk.CTk):
                       completion, summary, pending, reminders):
         self.completion_matrix, self.pending_df, self.reminder_df = completion, pending, reminders
         self.current_summary = summary
-        classification = pd.DataFrame([{"Sheet": sheet, "Type": kind}
+        classification = pd.DataFrame([{"Source": sheet, "Type": kind}
                                        for sheet, kind in sheet_types.items()])
         self.workbook_info.set(f"  {file_name}     Master: {master_sheet}     Key: {key_column}")
         self._fill_table(self.workbook_table, classification)
@@ -488,10 +510,15 @@ class EngagementDesktopApp(ctk.CTk):
         self._fill_table(self.pending_table, pending)
         self._fill_table(self.reminder_table, reminders)
         self._show_dashboard(summary, len(pending))
-        self.status_text.set(f"Analysis complete · {summary['total_users']} employees · "
-                             f"{len(pending)} require action")
+        if summary.get("mandatory_activity_count", 0):
+            status = (f"Analysis complete · {summary['total_users']} records · "
+                      f"{len(pending)} require action")
+        else:
+            status = (f"Analysis complete · {summary['total_users']} records · "
+                      "no required activity detected")
+        self.status_text.set(status)
         self.open_button.configure(state="normal", text="Launch workbook")
-        self.ai_data_status.configure(text=f"{summary['total_users']} employees ready for AI review",
+        self.ai_data_status.configure(text=f"{summary['total_users']} records ready for AI review",
                                       text_color=self.COLORS["cyan"])
         self.ai_analyze_button.configure(state="normal" if self.ai_ready else "disabled")
         self.show_page("dashboard")
@@ -501,17 +528,25 @@ class EngagementDesktopApp(ctk.CTk):
             child.destroy()
         self.chart_canvases.clear()
         total = summary["total_users"]
-        completed = max(total - pending_count, 0)
-        rate = round(completed / max(total, 1) * 100, 1)
+        completed = int(summary.get("mandatory_completed_users", 0))
+        pending = int(summary.get("mandatory_pending_users", pending_count))
+        rate = float(summary.get("mandatory_progress_rate", 0))
+        has_required = bool(summary.get("mandatory_activity_count", 0))
         cards = ctk.CTkFrame(self.metrics_frame, fg_color="transparent")
         cards.pack(fill="x", pady=(0, 18))
         for index in range(4):
             cards.grid_columnconfigure(index, weight=1, uniform="metric")
         metrics = [
-            ("Total employees", total, "All records", self.COLORS["blue"]),
-            ("Completed", completed, "No missing activity", self.COLORS["green"]),
-            ("Pending", pending_count, "Require follow-up", self.COLORS["amber"]),
-            ("Completion rate", f"{rate}%", "Overall progress", self.COLORS["cyan"]),
+            ("Total records", total, "Records in the master list", self.COLORS["blue"]),
+            ("Required complete", completed if has_required else "N/A",
+             "All required activities complete" if has_required else "No status column detected",
+             self.COLORS["green"]),
+            ("Required pending", pending if has_required else "N/A",
+             "At least one required activity pending" if has_required else "No status column detected",
+             self.COLORS["amber"]),
+            ("Required progress", f"{rate:.1f}%" if has_required else "N/A",
+             "Average across required activities" if has_required else "No status column detected",
+             self.COLORS["cyan"]),
         ]
         for index, metric in enumerate(metrics):
             self._metric_card(cards, index, *metric)
@@ -519,12 +554,14 @@ class EngagementDesktopApp(ctk.CTk):
         charts.pack(fill="both", expand=True)
         charts.grid_columnconfigure((0, 1), weight=1, uniform="chart")
         charts.grid_rowconfigure(0, weight=1)
-        self._bar_chart(charts, 0, "Participation by activity",
-                        "Share of employees participating in each program",
-                        summary.get("presence_metrics", {}), self.COLORS["blue"])
-        self._bar_chart(charts, 1, "Average progress",
-                        "Average completion across status-based activities",
-                        summary.get("status_metrics", {}), self.COLORS["green"])
+        self._bar_chart(charts, 0, "Participation overview",
+                        "Recorded participation in optional activities",
+                        summary.get("presence_metrics", {}), self.COLORS["blue"],
+                        "No participation activity detected")
+        self._bar_chart(charts, 1, "Required activity progress",
+                        "Average completion for required activities",
+                        summary.get("status_metrics", {}), self.COLORS["green"],
+                        "No required activity detected")
 
     def _metric_card(self, parent, column, label, value, note, accent):
         card = ctk.CTkFrame(parent, fg_color=self.COLORS["card"], corner_radius=14,
@@ -541,7 +578,8 @@ class EngagementDesktopApp(ctk.CTk):
         ctk.CTkLabel(card, text=note, text_color="#687594",
                      font=ctk.CTkFont(size=10)).pack(anchor="w", padx=18, pady=(0, 15))
 
-    def _bar_chart(self, parent, column, title, subtitle, values, color):
+    def _bar_chart(self, parent, column, title, subtitle, values, color,
+                   empty_text="Open a workbook to display this chart"):
         card = ctk.CTkFrame(parent, fg_color=self.COLORS["card"], corner_radius=16,
                             border_width=1, border_color=self.COLORS["border"])
         card.grid(row=0, column=column, sticky="nsew",
@@ -566,7 +604,7 @@ class EngagementDesktopApp(ctk.CTk):
                 axis.text(min(value + 1.8, 100), bar.get_y() + bar.get_height() / 2,
                           f"{value:.1f}%", va="center", fontsize=8, color=self.COLORS["text"])
         else:
-            axis.text(0.5, 0.5, "Open a workbook to display this chart", ha="center",
+            axis.text(0.5, 0.5, empty_text, ha="center",
                       va="center", transform=axis.transAxes, color=self.COLORS["muted"], fontsize=9)
             axis.set_xticks([])
             axis.set_yticks([])

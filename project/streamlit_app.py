@@ -95,7 +95,8 @@ if uploaded_file:
 
         pending_df = (
             generate_pending_report(
-                completion_matrix
+                completion_matrix,
+                sheet_types
             )
         )
 
