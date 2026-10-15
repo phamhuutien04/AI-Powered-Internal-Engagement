@@ -57,21 +57,29 @@ def detect_master_sheet(workbook):
         "account", "email", "username", "user id", "userid",
         "employee id", "employee code", "staff id", "staff code",
     ]
+    master_name_words = [
+        "master", "employee", "staff", "personnel", "roster",
+        "nhân sự", "nhan su", "danh sách", "danh sach", "account list",
+    ]
 
     def sheet_score(item):
-        position, (_, dataframe) = item
+        position, (sheet_name, dataframe) = item
         columns = [str(column).strip().lower() for column in dataframe.columns]
+        normalized_name = str(sheet_name).strip().lower()
         has_identity = any(
             any(word in column for word in identity_words)
             or column == "id"
             for column in columns
         )
-        # Prefer a sheet with an identifier, then the broadest list. The original
-        # left-to-right order remains the final tie-breaker.
+        has_master_name = any(word in normalized_name for word in master_name_words)
+        # A status/activity sheet can contain more rows than the employee master
+        # because of duplicates or historical records. Prefer semantic master
+        # names and a wider record schema before comparing row counts.
         return (
             int(has_identity),
-            len(dataframe),
+            int(has_master_name),
             len(dataframe.columns),
+            len(dataframe),
             -position,
         )
 
