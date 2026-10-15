@@ -2,9 +2,10 @@ import pandas as pd
 
 
 REMINDER_TEMPLATE = (
-    "Hi {account}, this is a friendly reminder that the following activities are still pending: "
-    "{missing_activities}. Please complete them and update your progress at your earliest convenience. "
-    "If you have already completed them, please let us know so we can verify the records. Thank you!"
+    "Hi {account}, this is a friendly reminder that the following activities or participation records "
+    "are still outstanding: {missing_activities}. Please complete any required activity and update any "
+    "applicable participation record at your earliest convenience. If the records are already current, "
+    "please let us know so they can be verified. Thank you!"
 )
 
 

@@ -330,9 +330,9 @@ class EngagementDesktopApp(ctk.CTk):
                     "You are AIPIE, a senior employee engagement and people analytics advisor. "
                     "Base every conclusion only on the supplied aggregate data. Be concise, "
                     "commercially useful, and never invent causes, consequences or facts. "
-                    "Only required status activities create follow-up needs. Participation activities "
-                    "are optional and non-participation must never be described as incomplete or non-compliant. "
-                    "Treat pending required activities as follow-up needs, not employee performance failures. "
+                    "The follow-up list contains both incomplete required activities and missing participation "
+                    "records. Treat required gaps as completion needs. Treat participation gaps as outreach or "
+                    "registration opportunities, never as compliance or employee performance failures. "
                     "Write in English and keep the complete report under 350 words."
                 ),
                 timeout=300,
@@ -372,16 +372,16 @@ class EngagementDesktopApp(ctk.CTk):
             "required_progress_by_activity_percent": self.current_summary.get("status_metrics", {}),
             "optional_activity_participant_counts": self.current_summary.get("presence_counts", {}),
             "optional_activity_participation_rate_percent": self.current_summary.get("presence_metrics", {}),
-            "required_activity_follow_up_frequency": missing_frequency,
-            "employees_by_number_of_pending_required_activities": missing_count_distribution,
+            "follow_up_frequency_by_activity": missing_frequency,
+            "employees_by_number_of_outstanding_activities": missing_count_distribution,
         }
         return (
             "Analyze the following aggregate employee engagement metrics:\n"
             f"{json.dumps(metrics, ensure_ascii=False, indent=2)}\n\n"
-            "Required status activities must be completed by every employee. "
-            "Participation activities are optional records; absence from them "
-            "is not an incomplete task, compliance failure, or follow-up requirement. Keep these two "
-            "categories separate throughout the report.\n\n"
+            "Required status activities must be completed by every employee. Participation activities "
+            "are also included in the follow-up list when no participation is recorded, but they are optional. "
+            "Describe those gaps as outreach opportunities, not compliance failures. Keep the two categories "
+            "separate throughout the report.\n\n"
             "Produce an executive report using exactly these sections:\n"
             "EXECUTIVE SUMMARY — 3 short sentences with the most important numbers.\n"
             "KEY RISKS — 3 to 5 numbered risks, each tied to evidence in the metrics.\n"
@@ -484,6 +484,10 @@ class EngagementDesktopApp(ctk.CTk):
         try:
             with open(file_path, "rb") as workbook_file:
                 workbook = load_visible_workbook(workbook_file)
+            sheet_states = {
+                name: dataframe.attrs.get("sheet_state", "visible")
+                for name, dataframe in workbook.items()
+            }
             master_sheet = detect_master_sheet(workbook)
             key_column = detect_key_column(workbook[master_sheet])
             sheet_types = classify_sheets(workbook, master_sheet, key_column)
@@ -492,19 +496,28 @@ class EngagementDesktopApp(ctk.CTk):
             pending = generate_pending_report(completion, sheet_types)
             reminders = generate_reminders(pending)
             self.after(0, lambda: self._show_results(
-                Path(file_path).name, master_sheet, key_column, sheet_types,
+                Path(file_path).name, master_sheet, key_column, sheet_types, sheet_states,
                 completion, summary, pending, reminders))
         except Exception as error:
             error_message = str(error)
             self.after(0, lambda message=error_message: self._show_error(message))
 
-    def _show_results(self, file_name, master_sheet, key_column, sheet_types,
+    def _show_results(self, file_name, master_sheet, key_column, sheet_types, sheet_states,
                       completion, summary, pending, reminders):
         self.completion_matrix, self.pending_df, self.reminder_df = completion, pending, reminders
         self.current_summary = summary
-        classification = pd.DataFrame([{"Source": sheet, "Type": kind}
-                                       for sheet, kind in sheet_types.items()])
-        self.workbook_info.set(f"  {file_name}     Master: {master_sheet}     Key: {key_column}")
+        classification = pd.DataFrame([
+            {
+                "Source": sheet,
+                "Visibility": str(sheet_states.get(sheet, "visible")).title(),
+                "Type": kind,
+            }
+            for sheet, kind in sheet_types.items()
+        ])
+        self.workbook_info.set(
+            f"  {file_name}     Sheets: {len(sheet_types)}     "
+            f"Master: {master_sheet}     Key: {key_column}"
+        )
         self._fill_table(self.workbook_table, classification)
         self._fill_table(self.completion_table, completion)
         self._fill_table(self.pending_table, pending)
@@ -627,15 +640,31 @@ class EngagementDesktopApp(ctk.CTk):
         if not columns:
             return
         total_width = max(table.winfo_width() - 20, 800)
-        if columns == ["Account", "Reminder"]:
+        if columns == ["Account", "Missing Activities", "Missing Count"]:
+            widths = [190, max(total_width - 340, 520), 150]
+            min_widths = [150, 420, 120]
+            stretches = [False, True, False]
+            anchors = ["w", "w", "center"]
+        elif columns == ["Account", "Reminder"]:
             widths = [max(int(total_width * .22), 180), max(int(total_width * .78), 520)]
+            min_widths = [160, 520]
+            stretches = [False, True]
+            anchors = ["w", "w"]
         elif len(columns) == 2:
             widths = [max(int(total_width * .55), 260), max(int(total_width * .45), 220)]
+            min_widths = [220, 180]
+            stretches = [True, True]
+            anchors = ["w", "w"]
         else:
             widths = [max(int(total_width / len(columns)), 145)] * len(columns)
-        for column, width in zip(columns, widths):
-            table.heading(column, text=column)
-            table.column(column, width=width, minwidth=110, stretch=True, anchor="w")
+            min_widths = [110] * len(columns)
+            stretches = [True] * len(columns)
+            anchors = ["w"] * len(columns)
+        for column, width, min_width, stretch, anchor in zip(
+                columns, widths, min_widths, stretches, anchors):
+            table.heading(column, text=column, anchor=anchor)
+            table.column(column, width=width, minwidth=min_width,
+                         stretch=stretch, anchor=anchor)
         for index, row in enumerate(dataframe.itertuples(index=False, name=None)):
             values = [
                 "" if pd.isna(value) else " ".join(str(value).split())

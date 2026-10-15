@@ -3,6 +3,7 @@ import openpyxl
 
 
 def load_visible_workbook(file_obj):
+    """Load every worksheet, including hidden sheets, for full classification."""
 
     file_obj.seek(0)
 
@@ -15,10 +16,6 @@ def load_visible_workbook(file_obj):
 
     for sheet in wb.worksheets:
 
-        # bỏ sheet hidden
-        if sheet.sheet_state != "visible":
-            continue
-
         sheet_name = sheet.title
 
         try:
@@ -29,6 +26,8 @@ def load_visible_workbook(file_obj):
                 file_obj,
                 sheet_name=sheet_name
             )
+
+            df.attrs["sheet_state"] = sheet.sheet_state
 
             workbook[sheet_name] = df
 
@@ -184,6 +183,12 @@ def classify_sheets(
     for sheet_name, df in workbook.items():
 
         if sheet_name == master_sheet:
+            continue
+
+        # Hidden worksheets are still loaded and listed, but are treated as
+        # supporting/reference data unless the user makes them visible.
+        if df.attrs.get("sheet_state", "visible") != "visible":
+            sheet_types[sheet_name] = "REFERENCE"
             continue
 
         best_overlap = 0
