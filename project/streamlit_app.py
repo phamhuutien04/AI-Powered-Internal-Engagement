@@ -29,13 +29,13 @@ from reminder_engine import (
 # =====================================
 
 st.set_page_config(
-    page_title="AI Internal Engagement",
+    page_title="AIPIE",
     page_icon="🤖",
     layout="wide"
 )
 
 st.title(
-    "🤖 AI-Powered Internal Engagement"
+    "AIPIE"
 )
 
 st.caption(

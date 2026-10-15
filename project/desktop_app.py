@@ -27,7 +27,7 @@ from workbook_scanner import (
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-APP_USER_MODEL_ID = "NOVA.AIInternalEngagement.Desktop.1"
+APP_USER_MODEL_ID = "AIPIE.AIInternalEngagement.Desktop.1"
 
 if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
@@ -49,7 +49,7 @@ class EngagementDesktopApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("AI-Powered Internal Engagement")
+        self.title("AIPIE")
         self.geometry("1440x880")
         self.minsize(1120, 700)
         self.configure(fg_color=self.COLORS["page"])
@@ -129,7 +129,7 @@ class EngagementDesktopApp(ctk.CTk):
         ).pack(side="left")
         title_box = ctk.CTkFrame(brand, fg_color="transparent")
         title_box.pack(side="left", padx=(12, 0))
-        ctk.CTkLabel(title_box, text="NOVA", text_color="white",
+        ctk.CTkLabel(title_box, text="AIPIE", text_color="white",
                      font=ctk.CTkFont(size=17, weight="bold")).pack(anchor="w")
         ctk.CTkLabel(title_box, text="Engagement OS", text_color="#929EC4",
                      font=ctk.CTkFont(size=12)).pack(anchor="w")
@@ -327,7 +327,7 @@ class EngagementDesktopApp(ctk.CTk):
             answer = generate(
                 prompt,
                 system=(
-                    "You are NOVA, a senior employee engagement and people analytics advisor. "
+                    "You are AIPIE, a senior employee engagement and people analytics advisor. "
                     "Base every conclusion only on the supplied aggregate data. Be concise, "
                     "commercially useful, and never invent causes, consequences or facts. "
                     "Only required status activities create follow-up needs. Participation activities "
