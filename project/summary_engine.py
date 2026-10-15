@@ -47,11 +47,14 @@ def generate_summary(completion_matrix, sheet_types=None):
     optional_participants = (
         int(presence_scores.gt(0).any(axis=1).sum()) if not presence_scores.empty else 0
     )
+    status_source_columns = completion_matrix.attrs.get("status_source_columns", {})
+    required_field_count = sum(len(columns) for columns in status_source_columns.values())
 
     return {
         "total_users": total_users,
         "total_activities": len(status_scores.columns) + len(presence_scores.columns),
         "mandatory_activity_count": len(status_scores.columns),
+        "required_field_count": required_field_count,
         "participation_activity_count": len(presence_scores.columns),
         "mandatory_completed_users": mandatory_completed_users,
         "mandatory_pending_users": mandatory_pending_users,

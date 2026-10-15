@@ -98,6 +98,7 @@ def build_completion_matrix(workbook, master_sheet, key_column, sheet_types):
     master_df[key_column] = master_df[key_column].astype(str).str.strip().str.lower()
 
     matrix = pd.DataFrame({"Account": master_df[key_column]})
+    status_source_columns = {}
     master_accounts = set(matrix["Account"])
     activity_sheets = [
         sheet_name
@@ -130,6 +131,7 @@ def build_completion_matrix(workbook, master_sheet, key_column, sheet_types):
                 continue
             if _status_series(activity_df[column]) is not None:
                 status_cols.append(column)
+        status_source_columns[sheet_name] = [str(column) for column in status_cols]
         progress_map = {}
         for _, row in activity_df.iterrows():
             flags = []
@@ -145,5 +147,9 @@ def build_completion_matrix(workbook, master_sheet, key_column, sheet_types):
 
     if len(matrix.columns) == 1:
         _add_inline_status_activities(matrix, master_df, key_column, sheet_types)
+
+    # Keep the exact source fields used by the calculation.  The desktop UI
+    # exposes this count so two installations can be compared at a glance.
+    matrix.attrs["status_source_columns"] = status_source_columns
 
     return matrix

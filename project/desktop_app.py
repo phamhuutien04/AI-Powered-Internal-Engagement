@@ -1,4 +1,5 @@
 import ctypes
+import hashlib
 import json
 import sys
 import threading
@@ -28,6 +29,26 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 APP_USER_MODEL_ID = "AIPIE.AIInternalEngagement.Desktop.1"
+APP_VERSION = "2.1.0"
+
+
+def _short_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:10].upper()
+
+
+def _build_id():
+    digest = hashlib.sha256()
+    project_dir = Path(__file__).resolve().parent
+    for name in ("completion_engine.py", "summary_engine.py", "workbook_scanner.py"):
+        digest.update((project_dir / name).read_bytes())
+    return digest.hexdigest()[:8].upper()
+
+
+BUILD_ID = _build_id()
 
 if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
@@ -131,7 +152,7 @@ class EngagementDesktopApp(ctk.CTk):
         title_box.pack(side="left", padx=(12, 0))
         ctk.CTkLabel(title_box, text="AIPIE", text_color="white",
                      font=ctk.CTkFont(size=17, weight="bold")).pack(anchor="w")
-        ctk.CTkLabel(title_box, text="Engagement OS", text_color="#929EC4",
+        ctk.CTkLabel(title_box, text=f"Engagement OS · v{APP_VERSION}", text_color="#929EC4",
                      font=ctk.CTkFont(size=12)).pack(anchor="w")
         ctk.CTkLabel(sidebar, text="COMMAND CENTER", text_color="#596686",
                      font=ctk.CTkFont(size=10, weight="bold")).grid(
@@ -482,6 +503,7 @@ class EngagementDesktopApp(ctk.CTk):
 
     def _analyze_workbook(self, file_path):
         try:
+            data_id = _short_hash(file_path)
             with open(file_path, "rb") as workbook_file:
                 workbook = load_visible_workbook(workbook_file)
             sheet_states = {
@@ -496,13 +518,13 @@ class EngagementDesktopApp(ctk.CTk):
             pending = generate_pending_report(completion, sheet_types)
             reminders = generate_reminders(pending)
             self.after(0, lambda: self._show_results(
-                Path(file_path).name, master_sheet, key_column, sheet_types, sheet_states,
+                Path(file_path).name, data_id, master_sheet, key_column, sheet_types, sheet_states,
                 completion, summary, pending, reminders))
         except Exception as error:
             error_message = str(error)
             self.after(0, lambda message=error_message: self._show_error(message))
 
-    def _show_results(self, file_name, master_sheet, key_column, sheet_types, sheet_states,
+    def _show_results(self, file_name, data_id, master_sheet, key_column, sheet_types, sheet_states,
                       completion, summary, pending, reminders):
         self.completion_matrix, self.pending_df, self.reminder_df = completion, pending, reminders
         self.current_summary = summary
@@ -516,7 +538,9 @@ class EngagementDesktopApp(ctk.CTk):
         ])
         self.workbook_info.set(
             f"  {file_name}     Sheets: {len(sheet_types)}     "
-            f"Master: {master_sheet}     Key: {key_column}"
+            f"Master: {master_sheet}     Key: {key_column}     "
+            f"Required fields: {summary.get('required_field_count', 0)}     "
+            f"Data ID: {data_id}     App: v{APP_VERSION} ({BUILD_ID})"
         )
         self._fill_table(self.workbook_table, classification)
         self._fill_table(self.completion_table, completion)
@@ -525,7 +549,8 @@ class EngagementDesktopApp(ctk.CTk):
         self._show_dashboard(summary, len(pending))
         if summary.get("mandatory_activity_count", 0):
             status = (f"Analysis complete · {summary['total_users']} records · "
-                      f"{len(pending)} require action")
+                      f"{len(pending)} require action · "
+                      f"{summary.get('required_field_count', 0)} required fields")
         else:
             status = (f"Analysis complete · {summary['total_users']} records · "
                       "no required activity detected")
